@@ -10,6 +10,9 @@ import { SiteDetailsModal } from '../components/SiteDetailsModal';
 import { ExcelUploaderModal } from '../components/ExcelUploaderModal';
 import { ProjectTabs } from '../components/ProjectTabs';
 import type { ActiveProjectScope } from '../components/ProjectTabs';
+import { WeDataAnalysis } from '../components/WeDataAnalysis';
+import { WeAddDataModal } from '../components/WeAddDataModal';
+import { WeDataAnalysisModal } from '../components/WeDataAnalysisModal';
 
 
 import { 
@@ -53,6 +56,11 @@ export const Dashboard: React.FC = () => {
   const [uploadedMetadata, setUploadedMetadata] = useState<UploadedFileMetadata | null>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
 
+  // WE specific UI states
+  const [isWeAnalysisOpen, setIsWeAnalysisOpen] = useState(false);
+  const [isWeAddDataOpen, setIsWeAddDataOpen] = useState(false);
+  const [customWeSites, setCustomWeSites] = useState<SiteRecord[]>([]);
+
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [modalFilterStatus, setModalFilterStatus] = useState<string | undefined>(undefined);
@@ -61,7 +69,9 @@ export const Dashboard: React.FC = () => {
   const currentScopeData = useMemo(() => {
     switch (activeScope) {
       case 'FTTS':
-        return COMBINED_FTTS_SITES;
+        // Include any custom WE sites when WE is selected via filter
+        const base = COMBINED_FTTS_SITES;
+        return filters.company === 'WE' ? [...base, ...customWeSites] : base;
       case 'ETAHA':
         return ETAHA_EXCEL_SITES;
       case 'TAHAWOL':
@@ -71,7 +81,7 @@ export const Dashboard: React.FC = () => {
       default:
         return COMBINED_FTTS_SITES;
     }
-  }, [activeScope, uploadedSites]);
+  }, [activeScope, uploadedSites, customWeSites, filters.company]);
 
   // Dynamic filter application across current scope
   const filteredSites = useMemo(() => {
@@ -482,6 +492,23 @@ export const Dashboard: React.FC = () => {
             customCards={customScopeCards}
             stats={companyStats}
           />
+          {/* WE Data Analysis Button */}
+          {filters.company === 'WE' && (
+          <div className="mt-2 flex space-x-2">
+            <button
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              onClick={() => setIsWeAnalysisOpen(true)}
+            >
+              عرض تحليل WE
+            </button>
+            <button
+              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+              onClick={() => setIsWeAddDataOpen(true)}
+            >
+              إضافة بيانات WE
+            </button>
+          </div>
+        )}
         </div>
 
         {/* 5. Core Power BI Visuals: Donut Chart + Summary Table */}
@@ -542,6 +569,17 @@ export const Dashboard: React.FC = () => {
         activeStatusFilter={modalFilterStatus || filters.status || undefined}
       />
 
+      <WeDataAnalysisModal
+        isOpen={isWeAnalysisOpen}
+        onClose={() => setIsWeAnalysisOpen(false)}
+        weSites={filteredSites.filter((s) => s.company === 'WE')}
+      />
+      <WeAddDataModal
+        isOpen={isWeAddDataOpen}
+        onClose={() => setIsWeAddDataOpen(false)}
+        existingSites={[...WE_EXCEL_SITES, ...customWeSites]}
+        onAddSite={(site) => setCustomWeSites((prev) => [...prev, site])}
+      />
       {/* Excel Uploader Modal */}
       <ExcelUploaderModal
         isOpen={isUploadModalOpen}
