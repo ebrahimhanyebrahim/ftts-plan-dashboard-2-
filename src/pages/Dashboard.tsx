@@ -10,9 +10,9 @@ import { SiteDetailsModal } from '../components/SiteDetailsModal';
 import { ExcelUploaderModal } from '../components/ExcelUploaderModal';
 import { ProjectTabs } from '../components/ProjectTabs';
 import type { ActiveProjectScope } from '../components/ProjectTabs';
-import { WeDataAnalysis } from '../components/WeDataAnalysis';
 import { WeAddDataModal } from '../components/WeAddDataModal';
 import { WeDataAnalysisModal } from '../components/WeDataAnalysisModal';
+import { useWeSiteCodes, exportToCSV } from '../hooks/useWeAPI';
 
 
 import { 
@@ -59,7 +59,11 @@ export const Dashboard: React.FC = () => {
   // WE specific UI states
   const [isWeAnalysisOpen, setIsWeAnalysisOpen] = useState(false);
   const [isWeAddDataOpen, setIsWeAddDataOpen] = useState(false);
-  const [customWeSites, setCustomWeSites] = useState<SiteRecord[]>([]);
+  const [customWeSites] = useState<SiteRecord[]>([]);
+  const [, setWeDashboardKey] = useState(0); // bump to force re-read
+
+  // Fetch site codes from central API (used by the Add Data modal)
+  const { codes: weCentralCodes, loading: weCodesLoading } = useWeSiteCodes();
 
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
@@ -492,21 +496,34 @@ export const Dashboard: React.FC = () => {
             customCards={customScopeCards}
             stats={companyStats}
           />
-          {/* WE Data Analysis Button */}
+          {/* WE Action Buttons */}
           {filters.company === 'WE' && (
-          <div className="mt-2 flex space-x-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <button
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
               onClick={() => setIsWeAnalysisOpen(true)}
             >
-              عرض تحليل WE
+              📊 عرض تحليل WE
             </button>
             <button
-              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+              className="px-4 py-2 bg-blue-800 text-white rounded hover:bg-blue-900 font-medium"
               onClick={() => setIsWeAddDataOpen(true)}
+              disabled={weCodesLoading}
             >
-              إضافة بيانات WE
+              {weCodesLoading ? '⏳ تحميل...' : '➕ إضافة / تحديث بيانات WE'}
             </button>
+            <button
+              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-medium"
+              onClick={() => exportToCSV()}
+              title="تصدير قاعدة البيانات المركزية كاملة إلى CSV"
+            >
+              📥 تصدير البيانات المركزية (CSV)
+            </button>
+            {weCentralCodes.length > 0 && (
+              <span className="px-3 py-2 bg-blue-50 text-blue-700 rounded text-sm font-medium">
+                🗄️ {weCentralCodes.length} موقع في قاعدة البيانات المركزية
+              </span>
+            )}
           </div>
         )}
         </div>
@@ -577,8 +594,8 @@ export const Dashboard: React.FC = () => {
       <WeAddDataModal
         isOpen={isWeAddDataOpen}
         onClose={() => setIsWeAddDataOpen(false)}
-        existingSites={[...WE_EXCEL_SITES, ...customWeSites]}
-        onAddSite={(site) => setCustomWeSites((prev) => [...prev, site])}
+        allSiteCodes={weCentralCodes.length > 0 ? weCentralCodes : WE_EXCEL_SITES.map(s => s.siteCode)}
+        onSaved={() => setWeDashboardKey(k => k + 1)}
       />
       {/* Excel Uploader Modal */}
       <ExcelUploaderModal
