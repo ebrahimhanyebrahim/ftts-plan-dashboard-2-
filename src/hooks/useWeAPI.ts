@@ -333,6 +333,74 @@ export async function exportToCSV() {
   }
 }
 
+// ── Export Clean / Filtered CSV with selected columns ──
+export function exportCleanCSV(
+  records: WeRecord[],
+  selectedColumns: string[],
+  filename = 'WE_Clean_Export'
+) {
+  if (records.length === 0) {
+    alert('لا توجد سجلات لتصديرها');
+    return;
+  }
+
+  const columns = selectedColumns.length > 0
+    ? selectedColumns
+    : Object.keys(records[0]).filter(k => !['id', '_id', 'created_at', '_createdAt', 'updated_at', '_updatedAt', 'created_by', '_createdBy', 'data', 'site_code'].includes(k));
+
+  const csvRows = [
+    columns.join(','),
+    ...records.map(r =>
+      columns.map(col => {
+        const val = (r as any)[col] !== undefined && (r as any)[col] !== null ? String((r as any)[col]) : '';
+        return `"${val.replace(/"/g, '""')}"`;
+      }).join(',')
+    )
+  ];
+
+  const csvContent = '\uFEFF' + csvRows.join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${filename}_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// ── Delete a single record ──
+export async function deleteRecord(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.from('we_records').delete().eq('id', id);
+    if (error) {
+      // Also attempt delete on local API as fallback
+      await fetch(`${LOCAL_API_BASE}/records/${id}`, { method: 'DELETE' });
+      return { success: false, error: error.message };
+    }
+    // Also cleanup local if exists
+    try { await fetch(`${LOCAL_API_BASE}/records/${id}`, { method: 'DELETE' }); } catch {}
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'فشل في حذف السجل' };
+  }
+}
+
+// ── Bulk delete multiple records ──
+export async function deleteRecordsBulk(ids: string[]): Promise<{ success: boolean; count?: number; error?: string }> {
+  try {
+    if (!ids || ids.length === 0) return { success: true, count: 0 };
+    const { error } = await supabase.from('we_records').delete().in('id', ids);
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true, count: ids.length };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'فشل في حذف السجلات' };
+  }
+}
+
 // ── Fetch all records for dashboard compatibility ──
 export async function fetchAllRecordsForDashboard(): Promise<WeRecord[]> {
   try {
@@ -348,3 +416,4 @@ export async function fetchAllRecordsForDashboard(): Promise<WeRecord[]> {
     return [];
   }
 }
+

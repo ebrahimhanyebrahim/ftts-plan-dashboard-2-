@@ -12,6 +12,7 @@ import { ProjectTabs } from '../components/ProjectTabs';
 import type { ActiveProjectScope } from '../components/ProjectTabs';
 import { WeAddDataModal } from '../components/WeAddDataModal';
 import { WeDataAnalysisModal } from '../components/WeDataAnalysisModal';
+import { WeDataManagerModal } from '../components/WeDataManagerModal';
 import { useWeRecords, useWeSiteCodes, exportToCSV } from '../hooks/useWeAPI';
 import type { WeRecord } from '../config/fieldConfig';
 
@@ -112,6 +113,8 @@ export const Dashboard: React.FC = () => {
   // WE specific UI states
   const [isWeAnalysisOpen, setIsWeAnalysisOpen] = useState(false);
   const [isWeAddDataOpen, setIsWeAddDataOpen] = useState(false);
+  const [isWeManagerOpen, setIsWeManagerOpen] = useState(false);
+  const [editingSiteCode, setEditingSiteCode] = useState<string | undefined>(undefined);
 
   // Live WE records and site codes from Supabase cloud database
   const { records: weCentralRecords, loading: weRecordsLoading, refetch: refetchWeRecords } = useWeRecords();
@@ -583,6 +586,13 @@ export const Dashboard: React.FC = () => {
               📥 تصدير البيانات المركزية (CSV)
             </button>
             <button
+              className="px-4 py-2 bg-purple-700 text-white rounded hover:bg-purple-800 font-medium text-sm flex items-center gap-1.5 shadow-sm"
+              onClick={() => setIsWeManagerOpen(true)}
+              title="إدارة وتعديل السجلات وحذف البيانات غير المهمة أو تصدير CSV نظيف"
+            >
+              🧹 إدارة وحذف بيانات WE (CSV)
+            </button>
+            <button
               className="px-3 py-2 bg-slate-200 text-slate-700 rounded hover:bg-slate-300 font-medium text-sm flex items-center gap-1.5 transition"
               onClick={() => {
                 refetchWeRecords();
@@ -662,10 +672,26 @@ export const Dashboard: React.FC = () => {
         onClose={() => setIsWeAnalysisOpen(false)}
         weSites={liveWeSites}
       />
+      <WeDataManagerModal
+        isOpen={isWeManagerOpen}
+        onClose={() => setIsWeManagerOpen(false)}
+        records={weCentralRecords}
+        onRefresh={async () => {
+          await Promise.all([refetchWeRecords(), refetchWeCodes()]);
+        }}
+        onEditRecord={(siteCode) => {
+          setEditingSiteCode(siteCode);
+          setIsWeAddDataOpen(true);
+        }}
+      />
       <WeAddDataModal
         isOpen={isWeAddDataOpen}
-        onClose={() => setIsWeAddDataOpen(false)}
+        onClose={() => {
+          setIsWeAddDataOpen(false);
+          setEditingSiteCode(undefined);
+        }}
         allSiteCodes={weCentralCodes.length > 0 ? weCentralCodes : liveWeSites.map(s => s.siteCode)}
+        initialSiteCode={editingSiteCode}
         onSaved={async () => {
           await Promise.all([refetchWeRecords(), refetchWeCodes()]);
         }}

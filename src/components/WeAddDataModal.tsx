@@ -17,6 +17,7 @@ interface WeAddDataModalProps {
   onClose: () => void;
   onSaved?: () => void; // callback to refresh dashboard after save
   allSiteCodes: string[]; // full list of site codes for search
+  initialSiteCode?: string; // direct site code to edit
 }
 
 type FormStep = 'select-site' | 'fill-form';
@@ -26,6 +27,7 @@ export const WeAddDataModal: React.FC<WeAddDataModalProps> = ({
   onClose,
   onSaved,
   allSiteCodes,
+  initialSiteCode,
 }) => {
   // ── State ──
   const [step, setStep] = useState<FormStep>('select-site');
@@ -73,8 +75,20 @@ export const WeAddDataModal: React.FC<WeAddDataModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       loadDropdownValues();
+      if (initialSiteCode) {
+        handleSelectSiteCode(initialSiteCode);
+      } else {
+        setStep('select-site');
+        setSiteCodeSearch('');
+        setSelectedSiteCode('');
+        setMasterRecord(null);
+        setFormData({});
+        setErrors({});
+        setSuccessMessage('');
+        setDuplicateWarning(null);
+      }
     }
-  }, [isOpen, loadDropdownValues]);
+  }, [isOpen, initialSiteCode, loadDropdownValues]);
 
   // ── Handle Site Code Selection ──
   const handleSelectSiteCode = async (code: string) => {
