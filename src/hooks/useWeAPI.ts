@@ -16,16 +16,16 @@ export interface APIResponse<T> {
 }
 
 // ── Convert Supabase row to WeRecord ──
-function normalizeRecord(row: Record<string, any>): WeRecord {
+export function normalizeRecord(row: Record<string, any>): WeRecord {
   const base = (row.data && typeof row.data === 'object') ? row.data : {};
   return {
-    ...base,
     ...row,
-    'site code': row['site code'] || row.site_code || base['site code'] || '',
-    _id: row.id || row._id || '',
-    _createdAt: row.created_at || row._createdAt || '',
-    _updatedAt: row.updated_at || row._updatedAt || '',
-    _createdBy: row.created_by || row._createdBy || 'user',
+    ...base,
+    'site code': base['site code'] || row['site code'] || row.site_code || '',
+    _id: row.id || row._id || base._id || '',
+    _createdAt: row.created_at || row._createdAt || base._createdAt || '',
+    _updatedAt: row.updated_at || row._updatedAt || base._updatedAt || '',
+    _createdBy: row.created_by || row._createdBy || base._createdBy || 'user',
   } as WeRecord;
 }
 
@@ -80,43 +80,49 @@ export function useWeSiteCodes() {
   const [codes, setCodes] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function loadCodes() {
-      try {
-        // Try Supabase first
-        const { data, error } = await supabase
-          .from('we_records')
-          .select('site_code');
+  const refreshCodes = useCallback(async () => {
+    try {
+      // Try Supabase first
+      const { data, error } = await supabase
+        .from('we_records')
+        .select('site_code, data');
 
-        if (!error && data && data.length > 0) {
-          const unique = [...new Set(data.map((r: any) => r.site_code).filter(Boolean))].sort();
-          setCodes(unique as string[]);
-          return;
-        }
-
-        // Fallback to local API
-        const res = await fetch(`${LOCAL_API_BASE}/site-codes`);
-        const localData = await res.json();
-        if (localData.success && localData.codes) {
-          setCodes(localData.codes);
-          return;
-        }
-
-        // Final fallback: use preloaded baseline site codes
-        const fallback = [...new Set(WE_EXCEL_SITES.map(s => s.siteCode))].sort();
-        setCodes(fallback);
-      } catch {
-        const fallback = [...new Set(WE_EXCEL_SITES.map(s => s.siteCode))].sort();
-        setCodes(fallback);
-      } finally {
-        setLoading(false);
+      if (!error && data && data.length > 0) {
+        const unique = [
+          ...new Set(
+            data
+              .map((r: any) => r.site_code || r.data?.['site code'])
+              .filter(Boolean)
+          ),
+        ].sort();
+        setCodes(unique as string[]);
+        return;
       }
-    }
 
-    loadCodes();
+      // Fallback to local API
+      const res = await fetch(`${LOCAL_API_BASE}/site-codes`);
+      const localData = await res.json();
+      if (localData.success && localData.codes) {
+        setCodes(localData.codes);
+        return;
+      }
+
+      // Final fallback: use preloaded baseline site codes
+      const fallback = [...new Set(WE_EXCEL_SITES.map((s) => s.siteCode))].sort();
+      setCodes(fallback);
+    } catch {
+      const fallback = [...new Set(WE_EXCEL_SITES.map((s) => s.siteCode))].sort();
+      setCodes(fallback);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  return { codes, loading };
+  useEffect(() => {
+    refreshCodes();
+  }, [refreshCodes]);
+
+  return { codes, loading, refetch: refreshCodes };
 }
 
 // ── Fetch single record by site code ──
@@ -125,7 +131,7 @@ export async function fetchSiteRecord(siteCode: string): Promise<WeRecord | null
     const { data, error } = await supabase
       .from('we_records')
       .select('*')
-      .eq('site_code', siteCode)
+      .or(`site_code.eq."${siteCode}",site code.eq."${siteCode}"`)
       .limit(1)
       .maybeSingle();
 
@@ -188,11 +194,11 @@ export async function saveRecord(
     const { data: existingRows } = await supabase
       .from('we_records')
       .select('*')
-      .eq('site_code', siteCode);
+      .or(`site_code.eq."${siteCode}",site code.eq."${siteCode}"`);
 
     const existingNormalized = (existingRows || []).map(normalizeRecord);
     const existing = existingNormalized.find(
-      r => r['site code'] === siteCode && r['التصنيف'] === activity && r['التاريخ المتوقع للانتهاء'] === dateWeek
+      (r) => r['site code'] === siteCode && r['التصنيف'] === activity && r['التاريخ المتوقع للانتهاء'] === dateWeek
     );
 
     if (existing && !forceUpdate) {
@@ -223,10 +229,11 @@ export async function saveRecord(
     };
 
     if (existing && forceUpdate) {
+      const targetId = (existing as any).id || existing._id;
       const { data: updated, error: updateErr } = await supabase
         .from('we_records')
         .update(payload)
-        .eq('id', existing._id)
+        .eq('id', targetId)
         .select()
         .single();
 
@@ -241,10 +248,12 @@ export async function saveRecord(
     } else {
       const { data: inserted, error: insertErr } = await supabase
         .from('we_records')
-        .insert([{
-          ...payload,
-          created_at: new Date().toISOString(),
-        }])
+        .insert([
+          {
+            ...payload,
+            created_at: new Date().toISOString(),
+          },
+        ])
         .select()
         .single();
 
@@ -258,7 +267,7 @@ export async function saveRecord(
       }
     }
 
-    // If Supabase call failed, fallback to local API
+    // Fallback to local server
     const body = { ...record };
     if (forceUpdate) (body as any)._forceUpdate = true;
     const res = await fetch(`${LOCAL_API_BASE}/records`, {
@@ -294,16 +303,18 @@ export async function exportToCSV() {
     }
 
     const excludeKeys = ['id', '_id', 'created_at', '_createdAt', 'updated_at', '_updatedAt', 'created_by', '_createdBy', 'data', 'site_code'];
-    const columns = Object.keys(records[0]).filter(k => !excludeKeys.includes(k));
+    const columns = Object.keys(records[0]).filter((k) => !excludeKeys.includes(k));
 
     const csvRows = [
       columns.join(','),
-      ...records.map(r =>
-        columns.map(col => {
-          const val = (r as any)[col] !== undefined && (r as any)[col] !== null ? String((r as any)[col]) : '';
-          return `"${val.replace(/"/g, '""')}"`;
-        }).join(',')
-      )
+      ...records.map((r) =>
+        columns
+          .map((col) => {
+            const val = (r as any)[col] !== undefined && (r as any)[col] !== null ? String((r as any)[col]) : '';
+            return `"${val.replace(/"/g, '""')}"`;
+          })
+          .join(',')
+      ),
     ];
 
     const csvContent = '\uFEFF' + csvRows.join('\r\n');

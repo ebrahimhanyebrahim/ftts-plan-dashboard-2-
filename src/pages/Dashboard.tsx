@@ -12,7 +12,8 @@ import { ProjectTabs } from '../components/ProjectTabs';
 import type { ActiveProjectScope } from '../components/ProjectTabs';
 import { WeAddDataModal } from '../components/WeAddDataModal';
 import { WeDataAnalysisModal } from '../components/WeDataAnalysisModal';
-import { useWeSiteCodes, exportToCSV } from '../hooks/useWeAPI';
+import { useWeRecords, useWeSiteCodes, exportToCSV } from '../hooks/useWeAPI';
+import type { WeRecord } from '../config/fieldConfig';
 
 
 import { 
@@ -28,6 +29,7 @@ import type {
   FilterState, 
   KpiData,
   SiteRecord,
+  StatusType,
   UploadedFileMetadata
 } from '../types/dashboard';
 
@@ -44,8 +46,59 @@ const initialFilters: FilterState = {
   searchQuery: '',
 };
 
-// Merged FTTS dataset: Vodafone (345) + Orange (121) from ftts.xlsx + WE (585) from We.xlsx
-const COMBINED_FTTS_SITES: SiteRecord[] = [...FTTS_EXCEL_SITES, ...WE_EXCEL_SITES];
+// Helper: Map a dynamic WeRecord from Supabase to SiteRecord format for dashboard
+function mapWeRecordToSiteRecord(r: WeRecord, index = 0): SiteRecord {
+  const siteCode = r['site code'] || (r as any).site_code || `WE-${index + 1}`;
+  const rawStatus = r['Site Status'] || '';
+  const rawTasneef = r['التصنيف'] || '';
+  
+  let status: StatusType = 'جاري المعاينة';
+  const ss = String(rawStatus).toUpperCase();
+  const tasneef = String(rawTasneef);
+
+  if (tasneef.includes('معوق')) {
+    status = 'معوقات';
+  } else if (tasneef.includes('متعذر') || tasneef.includes('متعثر') || tasneef.includes('رفض')) {
+    status = 'متعثرات';
+  } else if (tasneef.includes('تصاريح') || ss.includes('RDT') || tasneef.includes('طلب استخراج')) {
+    status = 'جاري تصاريح';
+  } else if (tasneef.includes('كهرب')) {
+    status = 'جاري العمل كهربى';
+  } else if (tasneef.includes('مدن') || ss.includes('CWF') || ss.includes('ONGOING')) {
+    status = 'جاري العمل مدني';
+  } else if (tasneef.includes('معاين')) {
+    status = 'جاري المعاينة';
+  } else if (tasneef.includes('تشغيل') || tasneef.includes('انتهاء') || tasneef.includes('تسليم') || ss.includes('ON AIR')) {
+    status = 'تم التسليم';
+  }
+
+  const central = r['السنترال'] || r['اداره التنفيذ المختصه'] || r['Zone'] || 'سنترال رئيسي';
+  const sector = r['Exc sector'] || r['Sectores'] || r['Exc Sectores'] || 'القاهرة الكبرى';
+  const generalAdmin = r['اداره التنفيذ المختصه'] || r['Exc Zone'] || 'الإدارة العامة لتنفيذ شبكات WE';
+  const competentAdmin = r['Zone'] || r['Sectore'] || 'المنطقة الأولى';
+  const classification = r['التصنيف'] || r['Type'] || 'برج محمول رئيسي';
+  const obstacleReason = r['اسباب التعذر'] || 'لا يوجد تعذر';
+  const expectedDate = r['التاريخ المتوقع للانتهاء'] || '2026-12-31';
+
+  return {
+    id: r._id || `WE-LIVE-${index + 1}`,
+    siteCode,
+    siteName: central && central !== 'سنترال رئيسي' ? `برج WE رقم ${siteCode} - ${central}` : `برج WE رقم ${siteCode}`,
+    company: 'WE',
+    status,
+    linksCount: 1,
+    sector,
+    generalAdmin,
+    competentAdmin,
+    central,
+    classification,
+    obstacleReason,
+    expectedDate,
+    progressPercent: status === 'تم التسليم' ? 100 : status === 'جاري تصاريح' ? 40 : status === 'جاري العمل مدني' ? 60 : 35,
+    civilContractor: 'المصرية للاتصالات',
+    notes: r['الجهة المطلوب الدعم منها'] || r['المستند'] || '',
+  };
+}
 
 export const Dashboard: React.FC = () => {
   // Current active project scope: FTTS, ETAHA, TAHAWOL, or UPLOADED
@@ -59,11 +112,23 @@ export const Dashboard: React.FC = () => {
   // WE specific UI states
   const [isWeAnalysisOpen, setIsWeAnalysisOpen] = useState(false);
   const [isWeAddDataOpen, setIsWeAddDataOpen] = useState(false);
-  const [customWeSites] = useState<SiteRecord[]>([]);
-  const [, setWeDashboardKey] = useState(0); // bump to force re-read
 
-  // Fetch site codes from central API (used by the Add Data modal)
-  const { codes: weCentralCodes, loading: weCodesLoading } = useWeSiteCodes();
+  // Live WE records and site codes from Supabase cloud database
+  const { records: weCentralRecords, loading: weRecordsLoading, refetch: refetchWeRecords } = useWeRecords();
+  const { codes: weCentralCodes, loading: weCodesLoading, refetch: refetchWeCodes } = useWeSiteCodes();
+
+  // Convert live Supabase WE records to SiteRecord format
+  const liveWeSites = useMemo<SiteRecord[]>(() => {
+    if (weCentralRecords && weCentralRecords.length > 0) {
+      return weCentralRecords.map((r, i) => mapWeRecordToSiteRecord(r, i));
+    }
+    return WE_EXCEL_SITES;
+  }, [weCentralRecords]);
+
+  // Combined FTTS dataset: Vodafone + Orange + Live dynamic WE dataset
+  const combinedFttsSites = useMemo<SiteRecord[]>(() => {
+    return [...FTTS_EXCEL_SITES, ...liveWeSites];
+  }, [liveWeSites]);
 
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
@@ -73,19 +138,17 @@ export const Dashboard: React.FC = () => {
   const currentScopeData = useMemo(() => {
     switch (activeScope) {
       case 'FTTS':
-        // Include any custom WE sites when WE is selected via filter
-        const base = COMBINED_FTTS_SITES;
-        return filters.company === 'WE' ? [...base, ...customWeSites] : base;
+        return combinedFttsSites;
       case 'ETAHA':
         return ETAHA_EXCEL_SITES;
       case 'TAHAWOL':
         return TAHAWOL_EXCEL_SITES;
       case 'UPLOADED':
-        return uploadedSites.length > 0 ? uploadedSites : COMBINED_FTTS_SITES;
+        return uploadedSites.length > 0 ? uploadedSites : combinedFttsSites;
       default:
-        return COMBINED_FTTS_SITES;
+        return combinedFttsSites;
     }
-  }, [activeScope, uploadedSites, customWeSites, filters.company]);
+  }, [activeScope, uploadedSites, combinedFttsSites]);
 
   // Dynamic filter application across current scope
   const filteredSites = useMemo(() => {
@@ -178,13 +241,13 @@ export const Dashboard: React.FC = () => {
 
   // FTTS Operator cards stats
   const companyStats = useMemo(() => {
-    const weSites = COMBINED_FTTS_SITES.filter((s) => s.company === 'WE');
-    const vodafoneSites = COMBINED_FTTS_SITES.filter((s) => s.company === 'Vodafone');
-    const orangeSites = COMBINED_FTTS_SITES.filter((s) => s.company === 'Orange');
+    const weSites = combinedFttsSites.filter((s) => s.company === 'WE');
+    const vodafoneSites = combinedFttsSites.filter((s) => s.company === 'Vodafone');
+    const orangeSites = combinedFttsSites.filter((s) => s.company === 'Orange');
 
     return {
-      allCount: COMBINED_FTTS_SITES.length,
-      allLinks: COMBINED_FTTS_SITES.reduce((sum, s) => sum + s.linksCount, 0),
+      allCount: combinedFttsSites.length,
+      allLinks: combinedFttsSites.reduce((sum, s) => sum + s.linksCount, 0),
       weCount: weSites.length,
       weLinks: weSites.reduce((sum, s) => sum + s.linksCount, 0),
       vodafoneCount: vodafoneSites.length,
@@ -192,7 +255,7 @@ export const Dashboard: React.FC = () => {
       orangeCount: orangeSites.length,
       orangeLinks: orangeSites.reduce((sum, s) => sum + s.linksCount, 0),
     };
-  }, []);
+  }, [combinedFttsSites]);
 
   // Custom cards for Etaha and Tahawol scopes
   const customScopeCards: CompanyStatItem[] | undefined = useMemo(() => {
@@ -456,7 +519,7 @@ export const Dashboard: React.FC = () => {
           activeScope={activeScope}
           onChangeScope={handleScopeChange}
           counts={{
-            ftts: COMBINED_FTTS_SITES.length,
+            ftts: combinedFttsSites.length,
             etaha: ETAHA_EXCEL_SITES.length,
             tahawol: TAHAWOL_EXCEL_SITES.length,
             uploaded: uploadedSites.length,
@@ -498,32 +561,40 @@ export const Dashboard: React.FC = () => {
           />
           {/* WE Action Buttons */}
           {filters.company === 'WE' && (
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium text-sm flex items-center gap-1.5"
               onClick={() => setIsWeAnalysisOpen(true)}
             >
               📊 عرض تحليل WE
             </button>
             <button
-              className="px-4 py-2 bg-blue-800 text-white rounded hover:bg-blue-900 font-medium"
+              className="px-4 py-2 bg-blue-800 text-white rounded hover:bg-blue-900 font-medium text-sm flex items-center gap-1.5"
               onClick={() => setIsWeAddDataOpen(true)}
               disabled={weCodesLoading}
             >
               {weCodesLoading ? '⏳ تحميل...' : '➕ إضافة / تحديث بيانات WE'}
             </button>
             <button
-              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-medium"
+              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-medium text-sm flex items-center gap-1.5"
               onClick={() => exportToCSV()}
               title="تصدير قاعدة البيانات المركزية كاملة إلى CSV"
             >
               📥 تصدير البيانات المركزية (CSV)
             </button>
-            {weCentralCodes.length > 0 && (
-              <span className="px-3 py-2 bg-blue-50 text-blue-700 rounded text-sm font-medium">
-                🗄️ {weCentralCodes.length} موقع في قاعدة البيانات المركزية
-              </span>
-            )}
+            <button
+              className="px-3 py-2 bg-slate-200 text-slate-700 rounded hover:bg-slate-300 font-medium text-sm flex items-center gap-1.5 transition"
+              onClick={() => {
+                refetchWeRecords();
+                refetchWeCodes();
+              }}
+              title="تحديث البيانات من السحابة"
+            >
+              🔄 {weRecordsLoading ? 'جارِ المزامنة...' : 'تحديث مباشر'}
+            </button>
+            <span className="px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-xs font-semibold">
+              ⚡ سحابي: {liveWeSites.length} موقع
+            </span>
           </div>
         )}
         </div>
@@ -589,13 +660,15 @@ export const Dashboard: React.FC = () => {
       <WeDataAnalysisModal
         isOpen={isWeAnalysisOpen}
         onClose={() => setIsWeAnalysisOpen(false)}
-        weSites={filteredSites.filter((s) => s.company === 'WE')}
+        weSites={liveWeSites}
       />
       <WeAddDataModal
         isOpen={isWeAddDataOpen}
         onClose={() => setIsWeAddDataOpen(false)}
-        allSiteCodes={weCentralCodes.length > 0 ? weCentralCodes : WE_EXCEL_SITES.map(s => s.siteCode)}
-        onSaved={() => setWeDashboardKey(k => k + 1)}
+        allSiteCodes={weCentralCodes.length > 0 ? weCentralCodes : liveWeSites.map(s => s.siteCode)}
+        onSaved={async () => {
+          await Promise.all([refetchWeRecords(), refetchWeCodes()]);
+        }}
       />
       {/* Excel Uploader Modal */}
       <ExcelUploaderModal
